@@ -2,6 +2,7 @@
 #include "llvm/Analysis/MemorySSAUpdater.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Pass.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -15,53 +16,38 @@ namespace
 {
     struct LICMPass : public PassInfoMixin<LICMPass>
     {
+        bool isLoopInvariant(Instruction *I, Loop &L)
+        {
+            for (Value *operand : I->operands())
+            {
+                if (!L.isLoopInvariant(operand))
+                    return false;
+            }
+            return true;
+        }
         PreservedAnalyses run(Loop &L, LoopAnalysisManager &AM,
                               LoopStandardAnalysisResults &AR, LPMUpdater &U)
         {
             errs() << "Running loop pass!\n";
             auto *Preheader = L.getLoopPreheader();
-            std::vector<Instruction *> instructions_to_hoist;
-            std::unordered_set<Value *> LI;
+            bool changed = false;
             bool has_converged = false;
-            while (!has_converged)
+            for (auto *BB : L.blocks())
             {
-                has_converged = true;
-                for (auto *BB : L.blocks())
+                for (BasicBlock::iterator II = BB->begin(), E = BB->end(); II != E;)
                 {
-                    for (auto &I : *BB)
+                    Instruction &I = *II++;
+                    if (isLoopInvariant(&I, L) && !I.isTerminator()) // Use L directly
                     {
-                        bool contains_loop_invariants = true;
-                        for (const auto &Use : I.operands())
-                        {
-                            if (LI.find(&*Use) == LI.end())
-                            {
-                                if (auto *UseInst = dyn_cast<Instruction>(&*Use))
-                                {
-                                    if (L.contains(UseInst))
-                                    {
-                                        contains_loop_invariants = false;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-
-                        if (LI.find(&I) != LI.end() || !isSafeToSpeculativelyExecute(&I) || I.mayReadOrWriteMemory() || !contains_loop_invariants)
-                            continue;
-
-                        LI.insert(&I);
-                        instructions_to_hoist.push_back(&I);
-                        has_converged = false;
+                        // Move the instruction to the loop preheader
+                        I.moveBefore(Preheader->getTerminator()); // Use . not ->
+                        I.eraseFromParent();
+                        changed = true;
                     }
                 }
             }
 
-            for (auto *Inst : instructions_to_hoist)
-            {
-                errs() << "Hoisting: " << *Inst << "\n";
-                Inst->moveBefore(Preheader->getTerminator());
-            }
-            return instructions_to_hoist.empty() ? PreservedAnalyses::all() : PreservedAnalyses::none();
+            return changed ? PreservedAnalyses::all() : PreservedAnalyses::none();
         };
     };
 
