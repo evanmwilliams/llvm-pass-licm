@@ -45,8 +45,10 @@ namespace
                                 }
                             }
                         }
+
                         if (LI.find(&I) != LI.end() || !isSafeToSpeculativelyExecute(&I) || I.mayReadOrWriteMemory() || !contains_loop_invariants)
                             continue;
+
                         LI.insert(&I);
                         instructions_to_hoist.push_back(&I);
                         has_converged = false;
@@ -56,6 +58,7 @@ namespace
 
             for (auto *Inst : instructions_to_hoist)
             {
+                errs() << "Hoisting: " << *Inst << "\n";
                 Inst->moveBefore(Preheader->getTerminator());
             }
             return instructions_to_hoist.empty() ? PreservedAnalyses::all() : PreservedAnalyses::none();
@@ -78,13 +81,15 @@ llvmGetPassPluginInfo()
             .RegisterPassBuilderCallbacks = [](PassBuilder &PB)
             {
                 PB.registerPipelineParsingCallback(
-                    [](StringRef name, FunctionPassManager &FPM,
-                       ArrayRef<PassBuilder::PipelineElement>)
+                    [](StringRef Name, LoopPassManager &LPM, ArrayRef<PassBuilder::PipelineElement>)
                     {
-                        if (name != "LICMPass")
-                            return false;
-                        FPM.addPass(createFunctionToLoopPassAdaptor(LICMPass()));
-                        return true;
+                        if (Name == "LICMPass")
+                        {
+                            errs() << "Loading LICMPass\n";
+                            LPM.addPass(LICMPass());
+                            return true;
+                        }
+                        return false;
                     });
             }};
 }
